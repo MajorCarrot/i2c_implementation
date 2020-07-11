@@ -23,8 +23,6 @@ module i2c_master(
 
     reg r_i2c_sda; // registered version of inout io_i2c_sda
 
-    assign io_i2c_sda = r_i2c_sda; // Continuous assignment
-
     reg [7:0] r_data;        // data read/written
     reg [7:0] r_state;       // Register to store current state
     reg [7:0] r_count;       // To count the number of bits transmitted
@@ -32,7 +30,9 @@ module i2c_master(
     reg r_rw;                // Read or Write data?
     reg r_i2c_scl_en = 1'b0; // Enable signal for clock
     reg r_data_out_en;       // Send data to top level? 1 => Yes
+    reg r_i2c_sda_en;        // To lose control of the line
 
+    assign io_i2c_sda = (r_i2c_sda_en) ? r_i2c_sda : 1'bz; // Continuous assignment
     assign io_data = r_data_out_en ? r_send_data : 8'hz;
     assign ow_data_en = r_data_out_en;
 
@@ -87,19 +87,20 @@ module i2c_master(
     // Finite State Machine
     always @(posedge iw_clk) begin
         if (iw_reset == 1) begin // reset condn
-            r_state       <= 8'b00000000;
+            r_state       <= IDLE;
             r_count       <= 8'd0;
             r_i2c_sda     <= 1'b1;  // Pull it to zero
             r_rw          <= 1'b0;  // We are writing data
             r_data_out_en <= 1'b0;
+            r_i2c_sda_en  <= 1'b1;
         end else begin // not reset condn
             case (r_state)
                 IDLE: begin // idle
                     r_i2c_sda <= 1;
                     if (iw_start) begin
                         r_send_data  <= {iw_addr, r_rw}; // data to send is addr+rw
-                        r_data       <= io_data; // Read data from top level module
-                        r_state      <= START; // Go to start only if top level wants a transaction
+                        r_data       <= io_data;         // Read data from top level module
+                        r_state      <= START;           // Go to start only if top level wants a transaction
                     end else r_state <= IDLE;
                 end // end idle
 
@@ -120,23 +121,13 @@ module i2c_master(
                 end // end write address
 
                 R_ACK_WA: begin // begin read ack for write address
-                    // Need to update to check for ack
-                    if(io_i2c_sda == 0) begin // ACK is low
-                        r_count <= 7;
-
-                        if (r_rw) begin // Read data
-                            r_state     <= R_DATA;
-                        end else begin // Write data
-                            r_state     <= W_DATA;
-                            r_send_data <= r_data;
-                        end // end r/w data
-
-                    end else begin // NACK received
-                        r_state <= STOP;
+                    if (r_i2c_sda_en) begin
+                        r_i2c_sda_en <= 1'b0;
                     end
                 end // end read ack for write address
 
                 W_DATA: begin // begin write data
+                    r_i2c_sda_en  <= 1'b1;
                     r_i2c_sda <= r_send_data[r_count];
                     if (r_count == 0) r_state <= R_ACK_WD;
                     else r_count <= r_count - 1;
@@ -144,29 +135,65 @@ module i2c_master(
 
                 R_ACK_WD: begin // begin read ack for write data
                     // Need to update to check for ack
-                    r_state <= STOP;
+                    if (r_i2c_sda_en) begin
+                        r_i2c_sda_en <= 1'b0;
+                    end
                 end // end read ack for write data
 
-                R_DATA: begin 
-                    r_send_data[r_count] <= r_i2c_sda;
-                    if (r_count == 0) begin // Finished reading
-                        r_data_out_en <= 1'b1;
-                        r_state       <= W_ACK_RD;
-                    end
-                end
-
                 W_ACK_RD: begin 
+                    r_i2c_sda_en  <= 1'b1;
                     r_i2c_sda     <= 1'b1; // Send NACK from master after read
                     r_state       <= STOP;
-                    r_data_out_en <= 1'b0;
                 end
 
                 STOP: begin // begin stop
                     r_i2c_sda     <= 1'b1;
                     r_state       <= IDLE;
                     r_data_out_en <= 1'b0;
+                    r_i2c_sda_en  <= 1'b1;
                 end // end stop
             endcase
         end
+    end
+
+    always @(negedge iw_clk) begin
+        case (r_state)
+            R_ACK_WA: begin
+                if (~r_i2c_sda_en) begin
+                    if(~io_i2c_sda) begin // ACK is low
+                        r_count <= 7;
+
+                        if (r_rw) begin // Read data
+                            r_state      <= R_DATA;
+                        end else begin // Write data
+                            r_state      <= W_DATA;
+                            r_send_data  <= r_data;
+                        end // end r/w data
+
+                    end else begin // NACK received
+                        r_state <= STOP;
+                    end
+                end
+            end
+
+            R_ACK_WD: begin
+                if (~r_i2c_sda_en) begin
+                    if (~io_i2c_sda) begin
+                        r_state <= STOP; // good for health
+                    end
+                    // Need to display bad for health
+                end
+            end
+
+            R_DATA: begin 
+                r_send_data[r_count] <= r_i2c_sda;
+                if (r_count == 0) begin // Finished reading
+                    r_data_out_en <= 1'b1;
+                    r_state       <= W_ACK_RD;
+                end else begin
+                    r_count <= r_count - 1;
+                end
+            end
+        endcase
     end
 endmodule

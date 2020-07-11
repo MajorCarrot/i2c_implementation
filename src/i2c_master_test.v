@@ -56,7 +56,7 @@ module i2c_master_test;
 
         r_reset     <= 1'b1;
         r_clk_reset <= 1'b1;
-        r_addr      <= 8'h50;
+        r_addr      <= 7'h50;
         r_data      <= 8'haa;
         r_start     <= 1'b0;
 
