@@ -4,7 +4,7 @@
 `default_nettype none
 
 module i2c_master(
-    inout wire io_i2c_sda,
+    inout wire io_i2c_sda,    // Data line
     inout wire io_i2c_scl,    // Clock for the comm
     inout wire [7:0] io_data, // Data to write in slave
 
@@ -12,6 +12,7 @@ module i2c_master(
     input wire iw_clk,        // Clock driving the master
     input wire [6:0] iw_addr, // Address of slave to address
     input wire iw_start,      // Set to high to start a transaction
+    input wire iw_rw,         // read/write bit
 
     output wire ow_ready,     // The master is ready
     output wire ow_data_en    // Data is ready if enable
@@ -98,9 +99,10 @@ module i2c_master(
                 IDLE: begin // idle
                     r_i2c_sda <= 1;
                     if (iw_start) begin
-                        r_send_data  <= {iw_addr, r_rw}; // data to send is addr+rw
+                        r_send_data  <= {iw_addr, iw_rw}; // data to send is addr+rw
                         r_data       <= io_data;         // Read data from top level module
                         r_state      <= START;           // Go to start only if top level wants a transaction
+                        r_rw         <= iw_rw;
                     end else r_state <= IDLE;
                 end // end idle
 
@@ -164,6 +166,7 @@ module i2c_master(
                         r_count <= 7;
 
                         if (r_rw) begin // Read data
+                            r_send_data  <= 0;
                             r_state      <= R_DATA;
                         end else begin // Write data
                             r_state      <= W_DATA;
@@ -186,7 +189,7 @@ module i2c_master(
             end
 
             R_DATA: begin 
-                r_send_data[r_count] <= r_i2c_sda;
+                r_send_data[r_count] <= io_i2c_sda;
                 if (r_count == 0) begin // Finished reading
                     r_data_out_en <= 1'b1;
                     r_state       <= W_ACK_RD;
